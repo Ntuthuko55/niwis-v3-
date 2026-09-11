@@ -1,0 +1,21 @@
+Traceback (most recent call last):
+  File "C:\Users\student\Documents\water\super\niwis_react_app\backend\app.py", line 21, in <module>
+    MODEL_REGISTRY = ModelRegistry().load()
+                     ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\student\Documents\water\super\core\loader.py", line 39, in load
+    registry["poisson"] = joblib.load(self._resolve("poisson_regression_drought_days_model.pkl"))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\student\Documents\water\super\.venv\Lib\site-packages\joblib\numpy_pickle.py", line 749, in load
+    obj = _unpickle(
+          ^^^^^^^^^^
+  File "C:\Users\student\Documents\water\super\.venv\Lib\site-packages\joblib\numpy_pickle.py", line 626, in _unpickle
+    obj = unpickler.load()
+          ^^^^^^^^^^^^^^^^
+  File "C:\Users\student\AppData\Local\Programs\Python\Python311\Lib\pickle.py", line 1213, in load
+    dispatch[key[0]](self)
+  File "C:\Users\student\AppData\Local\Programs\Python\Python311\Lib\pickle.py", line 1538, in load_stack_global
+    self.append(self.find_class(module, name))
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\student\AppData\Local\Programs\Python\Python311\Lib\pickle.py", line 1580, in find_class
+    __import__(module, level=0)
+ModuleNotFoundError: No module named '_loss'
