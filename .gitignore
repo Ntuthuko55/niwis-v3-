@@ -5,11 +5,19 @@ __pycache__/
 *.pyd
 .env
 .venv
+.venv-1
 
 # Node
 node_modules/
 dist/
 .vite/
+vite-dev.log
+vite-dev.err.log
+
+# Local tools and generated workspace files
+.ipynb_checkpoints/
+.kilo/
+*.lnk
 
 # Misc
 .DS_Store
