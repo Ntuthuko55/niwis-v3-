@@ -6,7 +6,6 @@ import {
   Calendar,
   ChevronRight,
   Clock,
-  Cpu,
   Download,
   FileSpreadsheet,
   FileText,
@@ -45,7 +44,6 @@ import AutocorrelationAnalysis from './AutocorrelationAnalysis'
 import CycleAnalysis from './CycleAnalysis'
 import DataPreview from './DataPreview'
 import DecompositionAnalysis from './DecompositionAnalysis'
-import FeatureEngineering from './FeatureEngineering'
 import ModelTraining from './ModelTraining'
 import PartialAutocorrelationAnalysis from './PartialAutocorrelationAnalysis'
 import SeasonalAnalysis from './SeasonalAnalysis'
@@ -78,7 +76,6 @@ const TABS = [
   { id: 'spectral', label: 'Spectral & FFT', icon: Zap, desc: 'Periodogram & dominant cycle peaks' },
   { id: 'wavelet', label: 'Wavelet Scalogram', icon: Clock, desc: '2D time-frequency power & shocks' },
   { id: 'change_point', label: 'Change Point Detection', icon: AlertCircle, desc: 'Structural breaks & regime shifts' },
-  { id: 'features', label: 'Feature Engineering', icon: Cpu, desc: 'Lags, rolling stats, EMA & date features' },
 ]
 
 export default function TimeSeriesDashboard() {
@@ -145,7 +142,7 @@ export default function TimeSeriesDashboard() {
     if (dataset) {
       const dateCol = dataset.index_column || dataset.inferred_time_columns?.[0] || 'date'
       fetchOverview(dataset.dataset_id, dateCol, newCol)
-      if (activeTab !== 'overview' && activeTab !== 'features') {
+      if (activeTab !== 'overview') {
         loadTabAnalysis(activeTab, newCol)
       }
     }
@@ -178,7 +175,7 @@ export default function TimeSeriesDashboard() {
 
   const handleTabClick = (tabId) => {
     setActiveTab(tabId)
-    if (tabId !== 'overview' && tabId !== 'features') {
+    if (tabId !== 'overview') {
       loadTabAnalysis(tabId)
     }
   }
@@ -189,7 +186,7 @@ export default function TimeSeriesDashboard() {
     try {
       const blob = await downloadPdfReport(
         dataset.dataset_id,
-        activeTab === 'features' ? 'trend' : activeTab,
+        activeTab,
         selectedColumn,
         { period: 12 }
       )
@@ -212,7 +209,7 @@ export default function TimeSeriesDashboard() {
     try {
       await exportAnalysisJSON(
         dataset.dataset_id,
-        activeTab === 'features' ? 'trend' : activeTab,
+        activeTab,
         selectedColumn
       )
     } catch (err) {
@@ -268,11 +265,11 @@ export default function TimeSeriesDashboard() {
         <div className="ts-header-left">
           <div className="ts-badge-pill">
             <Sparkles size={14} />
-            <span>NIWIS · CLIMATE ANALYTICS</span>
+            <span>Department of Water and Sanitation · NIWIS</span>
           </div>
-          <h1>NIWIS Climate Intelligence Studio</h1>
+          <h1>Climate &amp; Weather Observatory</h1>
           <p>
-            Provincial climate intelligence from the NIWIS data platform: trends, seasonality, stationarity, cycles, and structural-change diagnostics.
+            Provincial time-series monitoring, diagnostic analysis and evidence-ready reporting.
           </p>
         </div>
         <div className="ts-header-actions">
@@ -292,7 +289,7 @@ export default function TimeSeriesDashboard() {
         <div className="ts-map-header">
           <div className="ts-control-label">
             <MapPin size={13} />
-            <span>South Africa Province Selector</span>
+            <span>1 · Study area</span>
           </div>
           <span className="ts-map-status-pill">{loading ? 'Loading province…' : `${PROVINCES.find(([id]) => id === selectedProvince)?.[1] || 'Province'} selected`}</span>
         </div>
@@ -313,9 +310,9 @@ export default function TimeSeriesDashboard() {
 
           <div className="ts-province-selector-copy">
             <div>
-              <span className="ts-selector-eyebrow">Active climate series</span>
+              <span className="ts-selector-eyebrow">Selected province</span>
               <h3>{selectedProvinceLabel}</h3>
-              <p>Choose a province to load its full Supabase climate record for analysis.</p>
+              <p>Live NIWIS climate record · choose another province to update the study area.</p>
             </div>
             <div className="ts-province-chips">
               {PROVINCES.map(([id, label, short]) => (
@@ -339,7 +336,7 @@ export default function TimeSeriesDashboard() {
         <div className="ts-variable-picker" style={{ width: '100%' }}>
           <div className="ts-control-label">
             <Filter size={13} />
-            <span>Analysis Variable</span>
+            <span>2 · Analysis variable</span>
           </div>
           <select
             value={selectedColumn}
@@ -357,6 +354,13 @@ export default function TimeSeriesDashboard() {
       </section>
 
       {/* Executive KPI Summary Cards */}
+      <div className="ts-results-heading">
+        <div>
+          <span>Current series</span>
+          <strong>{selectedProvinceLabel} · {selectedColumn || 'Loading variable'}</strong>
+        </div>
+        <small>NIWIS climate warehouse · live provincial record</small>
+      </div>
       <section className="ts-kpi-grid">
         <div className="ts-kpi-card">
           <div className="ts-kpi-head">
@@ -449,57 +453,49 @@ export default function TimeSeriesDashboard() {
               <div className="ts-chart-header">
                 <div>
                   <h3>Master Time Series Visualizer: {selectedColumn}</h3>
-                  <p>Historical trajectory with dynamic multi-scale rolling moving averages and linear trend decomposition.</p>
-                </div>
-                <div className="ts-chart-toggles">
-                  <label className="toggle-chip">
-                    <input
-                      type="checkbox"
-                      checked={maOverlays.ma7}
-                      onChange={(e) => setMaOverlays({ ...maOverlays, ma7: e.target.checked })}
-                    />
-                    <span>7-Day MA</span>
-                  </label>
-                  <label className="toggle-chip">
-                    <input
-                      type="checkbox"
-                      checked={maOverlays.ma30}
-                      onChange={(e) => setMaOverlays({ ...maOverlays, ma30: e.target.checked })}
-                    />
-                    <span>30-Day MA</span>
-                  </label>
-                  <label className="toggle-chip">
-                    <input
-                      type="checkbox"
-                      checked={maOverlays.ma90}
-                      onChange={(e) => setMaOverlays({ ...maOverlays, ma90: e.target.checked })}
-                    />
-                    <span>90-Day MA</span>
-                  </label>
-                  <label className="toggle-chip">
-                    <input
-                      type="checkbox"
-                      checked={maOverlays.trend}
-                      onChange={(e) => setMaOverlays({ ...maOverlays, trend: e.target.checked })}
-                    />
-                    <span>Linear Trend</span>
-                  </label>
+                  <p>Executive one-line view of the observed series with a directional trend overlay.</p>
                 </div>
               </div>
 
               <div className="ts-chart-body" style={{ height: 380 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={masterChartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <LineChart data={masterChartData} margin={{ top: 12, right: 18, left: 0, bottom: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#dbe7f1" />
                     <XAxis dataKey="date" minTickGap={45} stroke="#64748b" tick={{ fontSize: 11 }} />
                     <YAxis stroke="#64748b" tick={{ fontSize: 11 }} />
-                    <Tooltip formatter={(val) => (val != null ? Number(val).toFixed(3) : '—')} />
+                    <Tooltip
+                      formatter={(val) => (val != null ? Number(val).toFixed(3) : '—')}
+                      contentStyle={{
+                        borderRadius: 12,
+                        border: '1px solid #d7e4ef',
+                        background: 'rgba(255,255,255,0.96)',
+                        color: '#0f172a',
+                        boxShadow: '0 10px 20px rgba(15, 23, 42, 0.08)',
+                      }}
+                    />
                     <Legend />
-                    <Line type="monotone" dataKey="raw" name="Observed Series" stroke="#0b6e69" dot={false} strokeWidth={1.5} isAnimationActive={false} />
-                    {maOverlays.ma7 && <Line type="monotone" dataKey="ma7" name="7-Day MA" stroke="#3b82f6" dot={false} strokeWidth={1.8} isAnimationActive={false} />}
-                    {maOverlays.ma30 && <Line type="monotone" dataKey="ma30" name="30-Day MA" stroke="#f59e0b" dot={false} strokeWidth={2} isAnimationActive={false} />}
-                    {maOverlays.ma90 && <Line type="monotone" dataKey="ma90" name="90-Day MA" stroke="#8b5cf6" dot={false} strokeWidth={2.2} isAnimationActive={false} />}
-                    {maOverlays.trend && <Line type="monotone" dataKey="trend" name="Trend" stroke="#e47738" strokeDasharray="4 4" dot={false} strokeWidth={2} isAnimationActive={false} />}
+                    <Line
+                      type="monotone"
+                      dataKey="raw"
+                      name="Observed Series"
+                      stroke="#0b6e69"
+                      dot={false}
+                      strokeWidth={2.2}
+                      activeDot={{ r: 5, fill: '#0b6e69', stroke: '#ffffff', strokeWidth: 2 }}
+                      isAnimationActive={false}
+                    />
+                    {maOverlays.trend && (
+                      <Line
+                        type="monotone"
+                        dataKey="trend"
+                        name="Trend"
+                        stroke="#e47738"
+                        strokeDasharray="5 5"
+                        dot={false}
+                        strokeWidth={2.2}
+                        isAnimationActive={false}
+                      />
+                    )}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -706,18 +702,6 @@ export default function TimeSeriesDashboard() {
         )}
 
         {/* TAB 12: FEATURE ENGINEERING */}
-        {activeTab === 'features' && dataset && (
-          <div className="ts-tab-content">
-            <FeatureEngineering
-              datasetId={dataset.dataset_id}
-              columns={numericColumns}
-              dateColumn={dateColumn}
-              datasetSummary={dataset.dataset_summary}
-              selectedColumn={selectedColumn}
-            />
-          </div>
-        )}
-
           {dataset && (
             <div className="ts-forecasting-block">
               <div className="ts-section-intro">
@@ -1466,6 +1450,91 @@ export default function TimeSeriesDashboard() {
             flex-direction: column;
             align-items: stretch;
           }
+        }
+
+        /* NIWIS observatory system: practical government information design. */
+        .ts-studio {
+          max-width: 1180px;
+          padding: 20px 20px 56px;
+        }
+
+        .ts-header {
+          align-items: center;
+          margin-bottom: 14px;
+          padding: 20px 24px;
+          border: 1px solid #164e63;
+          border-radius: 10px;
+          background: linear-gradient(110deg, #103c4b, #175d6a);
+          box-shadow: none;
+        }
+
+        .ts-header::after { display: none; }
+        .ts-badge-pill {
+          margin-bottom: 8px;
+          padding: 3px 8px;
+          background: rgba(255,255,255,.08);
+          border-color: rgba(255,255,255,.18);
+          color: #c8e4e6;
+          font-size: .61rem;
+        }
+        .ts-header h1 { margin-bottom: 4px; font-size: 1.65rem; letter-spacing: -.025em; }
+        .ts-header p { max-width: 680px; font-size: .8rem; line-height: 1.45; }
+        .ts-btn-primary { padding: 8px 12px; border-radius: 6px; background: #d89b37; border-color: #c78a2d; box-shadow: none; font-size: .74rem; }
+
+        .ts-province-map-panel, .ts-control-bar {
+          margin-bottom: 12px;
+          border-color: #d7e1e2;
+          border-radius: 10px;
+          box-shadow: none;
+        }
+        .ts-province-map-panel { padding: 12px; }
+        .ts-map-header { margin-bottom: 10px; }
+        .ts-map-status-pill { padding: 3px 7px; border-radius: 4px; font-size: .62rem; }
+        .ts-province-selector-layout { gap: 18px; }
+        .ts-map-geo-wrap { width: min(275px, 35%); flex-basis: min(275px, 35%); border-radius: 7px; }
+        .ts-province-selector-copy { gap: 13px; padding: 8px 4px 4px 0; }
+        .ts-selector-eyebrow { margin-bottom: 4px; font-size: .59rem; }
+        .ts-province-selector-copy h3 { margin-bottom: 3px; font-size: 1.08rem; }
+        .ts-province-selector-copy p { font-size: .73rem; line-height: 1.4; }
+        .ts-province-chips { gap: 5px; }
+        .ts-prov-chip { min-height: 28px; padding: 4px 7px; border-radius: 5px; font-size: .63rem; }
+        .chip-code { font-size: .56rem; }
+
+        .ts-control-bar { padding: 11px 14px; }
+        .ts-control-label { margin-bottom: 5px; font-size: .63rem; }
+        .ts-select { min-height: 34px; padding: 5px 9px; border-radius: 5px; font-size: .8rem; }
+        .ts-results-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin: 15px 0 8px; }
+        .ts-results-heading span { display: block; margin-bottom: 3px; color: #5d7479; font-size: .59rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+        .ts-results-heading strong { color: #173f48; font-size: .96rem; }
+        .ts-results-heading small { color: #6b7f85; font-size: .67rem; }
+
+        .ts-kpi-grid { gap: 9px; margin-bottom: 14px; }
+        .ts-kpi-card { min-height: 112px; padding: 12px 14px; border-color: #d7e1e2; border-radius: 8px; box-shadow: none; }
+        .ts-kpi-head span { font-size: .61rem; }
+        .ts-kpi-card strong { margin: 2px 0; font-size: 1.12rem; }
+        .ts-kpi-card small { font-size: .67rem; }
+        .ts-badge { padding: 3px 7px; font-size: .68rem; }
+
+        .ts-tab-bar { gap: 0; margin-bottom: 14px; padding: 0; border-bottom: 1px solid #cedbdd; }
+        .ts-tab-btn { padding: 9px 12px; border-radius: 0; color: #587078; font-size: .72rem; }
+        .ts-tab-btn.active { color: #0f6463; background: #edf6f4; box-shadow: inset 0 -3px 0 #0f7771; }
+        .ts-tab-btn:hover { background: #f3f7f7; }
+        .ts-content-stack { gap: 16px; }
+        .ts-chart-card, .ts-panel-card, .ts-forecasting-block { margin-bottom: 14px; padding: 16px; border-color: #d7e1e2; border-radius: 9px; box-shadow: none; }
+        .ts-chart-header { margin-bottom: 10px; }
+        .ts-chart-header h3 { font-size: .95rem; }
+        .ts-chart-header p, .ts-section-intro p { font-size: .75rem; }
+        .ts-chart-body { height: 320px !important; }
+        .ts-panel-card h3 { margin-bottom: 9px; font-size: .9rem; }
+        .ts-summary-table { gap: 7px; }
+        .ts-summary-table div { padding-bottom: 5px; font-size: .76rem; }
+        .ts-btn-outline { padding: 7px 10px; border-radius: 5px; font-size: .7rem; }
+
+        @media (max-width: 640px) {
+          .ts-studio { padding: 12px 12px 40px; }
+          .ts-header { padding: 16px; }
+          .ts-results-heading { align-items: flex-start; flex-direction: column; gap: 3px; }
+          .ts-map-geo-wrap { width: 100%; flex-basis: auto; }
         }
       `}</style>
     </div>
