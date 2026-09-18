@@ -1,20 +1,12 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from app.supabase_source import SupabaseSourceError, load_latest_province_record
 
 app = Flask(__name__)
 CORS(app)
-
-PROVINCE_IDS = {
-    "Eastern Cape": "eastern-cape", "Free State": "free-state", "Gauteng": "gauteng",
-    "KwaZulu-Natal": "kwa-zulu-natal", "Limpopo": "limpopo", "Mpumalanga": "mpumalanga",
-    "North West": "north-west", "Northern Cape": "northern-cape", "Western Cape": "western-cape",
-}
 
 DEFAULT_INPUTS = {
     "province": "Eastern Cape",
@@ -62,52 +54,6 @@ def normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "seasonal_rainfall_3m": safe_float(payload.get("seasonal_rainfall_3m", DEFAULT_INPUTS["seasonal_rainfall_3m"])),
         "seasonal_rainfall_6m": safe_float(payload.get("seasonal_rainfall_6m", DEFAULT_INPUTS["seasonal_rainfall_6m"])),
     }
-
-
-def climate_from_latest_record(record: dict[str, Any], province: str) -> dict[str, Any]:
-    """Map the NIWIS database schema to the drought model inputs."""
-    rainfall = safe_float(record.get("daily_rainfall"))
-    pet = safe_float(record.get("daily_pet"))
-    return {
-        "province": province,
-        "rainfall": rainfall,
-        "rainfall_anomaly": 0.0,
-        "rainfall_intensity": rainfall / 24.0,
-        "min_temperature": safe_float(record.get("daily_tmin")),
-        "max_temperature": safe_float(record.get("daily_tmax")),
-        "mean_temperature": safe_float(record.get("daily_tmean")),
-        "temperature_anomaly": 0.0,
-        "pet": pet,
-        "et0": pet,
-        "humidity": safe_float(record.get("daily_relative_humidity")),
-        "solar_radiation": safe_float(record.get("solar_radiation_w_m2")),
-        "wind_speed": safe_float(record.get("wind_speed_2m_m_s", record.get("wind_speed_10m_m_s"))),
-        "seasonal_rainfall_3m": safe_float(record.get("rainfall_accumulation_3m")),
-        "seasonal_rainfall_6m": safe_float(record.get("rainfall_accumulation_6m")),
-    }
-
-
-def latest_prediction(province: str) -> dict[str, Any]:
-    province_id = PROVINCE_IDS.get(province)
-    if not province_id:
-        raise ValueError("Unknown province")
-    record = load_latest_province_record(province_id)
-    climate = climate_from_latest_record(record, province)
-    return {"province": province, "observation_date": record.get("date"), "bundle": compute_bundle(climate), "inputs": climate}
-
-
-def drought_code(spi: float) -> str:
-    if spi > -0.5:
-        return "-"
-    if spi >= -0.79:
-        return "D0"
-    if spi >= -1.29:
-        return "D1"
-    if spi >= -1.59:
-        return "D2"
-    if spi >= -1.99:
-        return "D3"
-    return "D4"
 
 
 def drought_class(spi: float) -> tuple[str, str]:
@@ -161,7 +107,6 @@ def compute_bundle(climate: dict[str, Any]) -> dict[str, Any]:
     hazard_ratio = round(max(0.15, 0.8 + max(0.0, -spi) * 0.9 + (temperature_anomaly / 7.0)), 4)
     confidence_score = round(max(52.0, min(96.0, 86.0 - abs(spi) * 7.0 + (rainfall_intensity * 0.8))), 2)
     drought_label, risk_label = drought_class(spi)
-    code = drought_code(spi)
 
     variable_importance = {
         "Rainfall": round(max(1.0, 100.0 * (1.0 - max(0.0, (rainfall - 30.0) / 120.0))), 2),
@@ -188,7 +133,6 @@ def compute_bundle(climate: dict[str, Any]) -> dict[str, Any]:
         "confidence_score": confidence_score,
         "risk_label": risk_label,
         "drought_label": drought_label,
-        "drought_code": code,
         "variable_importance": variable_importance,
         "hazard_days_to_moderate": round(max(0.0, 20.0 - drought_days / 2.0), 2),
         "hazard_days_to_severe": round(max(0.0, 55.0 - drought_days), 2),
@@ -240,17 +184,6 @@ def predict():
         "inputs": climate,
     }
     return jsonify(response), 200
-
-
-@app.get("/api/predictions/latest")
-def latest_predictions():
-    """Return predictions calculated from the newest NIWIS observation per province."""
-    try:
-        with ThreadPoolExecutor(max_workers=6) as executor:
-            predictions = list(executor.map(latest_prediction, PROVINCE_IDS))
-    except (SupabaseSourceError, ValueError) as exc:
-        return jsonify({"error": str(exc)}), 503
-    return jsonify({"source": "supabase", "predictions": predictions}), 200
 
 
 if __name__ == "__main__":

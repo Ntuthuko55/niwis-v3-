@@ -75,67 +75,6 @@ app.mount("/spatial-api", WSGIMiddleware(spatial_app))
 app.mount("/multivariate-api", WSGIMiddleware(multivariate_app))
 app.mount("/niwis-api", WSGIMiddleware(niwis_app))
 
-# District centroids used to place the satellite-monitoring regions on the
-# national map.  The CSV is district-level rather than point-station data.
-SATELLITE_CENTROIDS = {
-    "alfred nzo": (29.3, -30.7), "amajuba": (30.0, -27.7), "amathole": (27.0, -32.0),
-    "bojanala": (27.2, -25.2), "buffalo city": (27.9, -33.0), "cape town": (18.5, -33.9),
-    "cape winelands": (19.3, -33.5), "capricorn": (29.4, -23.8), "central karoo": (22.5, -32.7),
-    "chris hani": (26.5, -31.5), "dr kenneth kaunda": (26.7, -26.8), "dr ruth segomotsi mompati": (25.0, -26.8),
-    "eden": (22.2, -34.0), "ehlanzeni": (31.0, -25.4), "ekurhuleni": (28.3, -26.2),
-    "ethekwini": (31.0, -29.8), "fezile dabi": (27.8, -27.2), "frances baard": (24.7, -28.6),
-    "gert sibande": (30.0, -27.1), "ilembe": (31.2, -29.2), "joe gqabi": (27.5, -30.5),
-    "johannesburg": (28.0, -26.2), "john taolo gaetsewe": (23.3, -27.7), "lejweleputswa": (26.5, -28.1),
-    "mangaung": (26.2, -29.1), "mopani": (30.5, -23.5), "namakwa": (19.4, -30.2),
-    "nelson mandela bay": (25.5, -33.9), "ngaka modiri molema": (25.6, -26.5), "nkangala": (29.2, -25.3),
-    "ortambo": (28.4, -31.6), "overberg": (20.3, -34.3), "pixley ka seme": (24.3, -30.4),
-    "sarah baartman": (24.8, -33.2), "sedibeng": (28.0, -26.7), "sekhukhune": (30.1, -24.8),
-    "sisonke": (29.7, -30.4), "thabo mofutsanyane": (28.5, -28.5), "tshwane": (28.2, -25.8),
-    "ugu": (30.5, -30.3), "umgungundlovu": (30.3, -29.6), "umkhanyakude": (32.3, -27.7),
-    "umzinyathi": (30.4, -28.5), "uthukela": (29.7, -28.6), "uthungulu": (31.5, -28.7),
-    "vhembe": (30.5, -22.9), "waterberg": (27.9, -24.4), "west coast": (18.4, -32.0),
-    "west rand": (27.7, -26.2), "xhariep": (25.1, -30.2), "z f mgcawu": (21.8, -28.4), "zululand": (31.0, -27.0),
-}
-
-@app.get("/satellite/stations")
-def get_satellite_stations():
-    """Return the latest observation for each district in csv's/satelite.csv."""
-    source = Path(__file__).resolve().parents[2] / "csv's" / "satelite.csv"
-    if not source.exists():
-        raise HTTPException(status_code=404, detail=f"Satellite source file was not found: {source}")
-    frame = pd.read_csv(source)
-    required = {"date", "district_name", "NDVI"}
-    if not required.issubset(frame.columns):
-        raise HTTPException(status_code=422, detail="Satellite CSV is missing required columns.")
-    frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
-    latest = frame.loc[frame["date"] == frame["date"].max()].copy()
-    latest["district_name"] = latest["district_name"].str.strip().str.lower()
-    latest = latest[latest["district_name"].isin(SATELLITE_CENTROIDS)]
-    numeric_columns = ["NDVI", "LST", "NDWI", "VCI", "TCI", "VHI", "rootzone_soil_moisture", "surface_soil_moisture", "surface_water_extent_km2", "GRACE_TWS"]
-    stations = []
-    for row in latest.to_dict("records"):
-        lon, lat = SATELLITE_CENTROIDS[row["district_name"]]
-        stations.append({
-            "name": row["district_name"].title(), "lon": lon, "lat": lat,
-            **{column: float(row[column]) if pd.notna(row.get(column)) else None for column in numeric_columns},
-        })
-    return {"date": latest["date"].max().date().isoformat(), "station_count": len(stations), "stations": stations}
-
-@app.get("/satellite/history")
-def get_satellite_history(district: str = Query(..., min_length=1)):
-    """Return the complete satellite time series for one displayed district."""
-    source = Path(__file__).resolve().parents[2] / "csv's" / "satelite.csv"
-    if not source.exists():
-        raise HTTPException(status_code=404, detail="Satellite source file was not found.")
-    frame = pd.read_csv(source)
-    key = "".join(char for char in district.lower() if char.isalnum())
-    frame["district_key"] = frame["district_name"].astype(str).str.lower().str.replace(r"[^a-z0-9]", "", regex=True)
-    rows = frame.loc[frame["district_key"] == key].copy().sort_values("date")
-    if rows.empty:
-        raise HTTPException(status_code=404, detail="District not found in satellite CSV.")
-    fields = ["date", "NDVI", "LST", "NDWI", "VCI", "TCI", "VHI", "rootzone_soil_moisture", "surface_soil_moisture", "surface_water_extent_km2", "GRACE_TWS"]
-    return {"district": rows.iloc[0]["district_name"].title(), "history": [{field: (str(row[field]) if field == "date" else float(row[field])) for field in fields} for row in rows[fields].to_dict("records")]}
-
 # Global state
 DATASETS: Dict[str, dict] = {}
 TRAINING_JOBS: Dict[str, dict] = {}

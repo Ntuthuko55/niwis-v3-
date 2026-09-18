@@ -3,14 +3,10 @@ import { Clock, CloudRain, Database, Map, Sparkles } from 'lucide-react'
 import SpatialAnalysis from './components/SpatialAnalysis'
 import MultivariateStatistics from './components/MultivariateStatistics'
 import TimeSeriesDashboard from './components/TimeSeriesDashboard'
-import NIWISPortal from './components/NIWISPortal'
+import NIWISDashboard from './components/NIWISDashboard'
 
 export default function App() {
   const [activeWorkspace, setActiveWorkspace] = useState('niwis')
-
-  if (activeWorkspace === 'niwis') {
-    return <NIWISPortal />
-  }
 
   return (
     <>
@@ -59,6 +55,7 @@ export default function App() {
       {activeWorkspace === 'timeseries' && <TimeSeriesDashboard />}
       {activeWorkspace === 'spatial' && <SpatialAnalysis />}
       {activeWorkspace === 'multivariate' && <MultivariateStatistics />}
+      {activeWorkspace === 'niwis' && <NIWISDashboard />}
     </>
   )
 }

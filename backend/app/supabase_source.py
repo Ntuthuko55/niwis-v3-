@@ -216,33 +216,3 @@ def load_province_dataframe(province_id: str) -> pd.DataFrame:
         df = df.sort_values(date_column, kind="stable").reset_index(drop=True)
     _cache_frame(cache_key, df)
     return df.copy(deep=True)
-
-
-def load_latest_province_record(province_id: str) -> dict:
-    """Read only the newest observation for a province (one indexed row)."""
-    base_url, key, table = _settings()
-    table_url = f"{base_url}/rest/v1/{quote(table, safe='_')}"
-    schema = _fresh_cache_entry(_SCHEMA_CACHE, table_url)
-    if schema is None:
-        sample = _request_json(f"{table_url}?select=*&limit=1", key)
-        if not sample:
-            raise SupabaseSourceError(f"The Supabase table '{table}' is empty.")
-        province_column = _column_name(list(sample[0]), "province", "province_name", "province x")
-        date_column = _column_name(list(sample[0]), "date", "observation_date", "record_date")
-        if not province_column or not date_column:
-            raise SupabaseSourceError("The Supabase table requires province and date columns.")
-        schema = (province_column, date_column)
-        with _CACHE_LOCK:
-            _SCHEMA_CACHE[table_url] = (monotonic() + _CACHE_TTL_SECONDS, schema)
-    province_column, date_column = schema
-
-    for candidate in _province_candidates(province_id):
-        encoded_filter = quote(f"eq.{candidate}", safe=".")
-        query = (
-            f"{table_url}?select=*&{quote(province_column, safe='_')}={encoded_filter}"
-            f"&order={quote(date_column, safe='_')}.desc&limit=1"
-        )
-        records = _request_json(query, key)
-        if records:
-            return records[0]
-    raise SupabaseSourceError(f"No records found in Supabase for province '{province_id}'.")
