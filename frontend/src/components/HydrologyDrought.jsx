@@ -45,9 +45,12 @@ export default function HydrologyDrought() {
   // Fetch detailed history whenever district or date changes
   useEffect(() => {
     setLoading(true)
-    fetch(`/api/hydrology/history?district=${encodeURIComponent(selectedDistrict)}&date=${encodeURIComponent(selectedDate)}`)
-      .then((r) => r.ok ? r.json() : Promise.reject())
+    const url = `/api/hydrology/history?district=${encodeURIComponent(selectedDistrict)}&date=${encodeURIComponent(selectedDate)}`
+    console.debug('[Hydrology] fetching history ->', { selectedDistrict, selectedDate, url })
+    fetch(url)
+      .then((r) => r.ok ? r.json() : Promise.reject(r))
       .then((data) => {
+        console.debug('[Hydrology] history response', { district: selectedDistrict, items: data })
         setHistoryData(data)
         if (data.available_dates && data.available_dates.length) {
           setAvailableDates(data.available_dates)
@@ -193,7 +196,7 @@ export default function HydrologyDrought() {
               onChange={(e) => setSelectedDistrict(e.target.value)}
               aria-label="Select South African District"
             >
-              {allStations.length > 0 ? (
+                allStations.length > 0 ? (
                 allStations.map((s) => (
                   <option key={s.name} value={s.name}>
                     {s.name} ({s.province})
