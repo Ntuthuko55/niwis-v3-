@@ -196,7 +196,7 @@ export default function HydrologyDrought() {
               onChange={(e) => setSelectedDistrict(e.target.value)}
               aria-label="Select South African District"
             >
-                allStations.length > 0 ? (
+              {allStations.length > 0 ? (
                 allStations.map((s) => (
                   <option key={s.name} value={s.name}>
                     {s.name} ({s.province})
