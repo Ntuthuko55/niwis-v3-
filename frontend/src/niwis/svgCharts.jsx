@@ -95,7 +95,7 @@ export function BarEl({ v, color, max = 100 }) {
   return <div className="nw-bar"><i style={{ width: `${Math.max(2, Math.min(100, (v / max) * 100))}%`, background: color }} /></div>
 }
 
-export function MapSVG({ provinces, selected, onSelect, colorFn, points }) {
+export function MapSVG({ provinces, selected, onSelect, colorFn, points, valueFn }) {
   return (
     <div className="nw-map">
       <svg viewBox="0 0 680 590">
@@ -111,13 +111,20 @@ export function MapSVG({ provinces, selected, onSelect, colorFn, points }) {
               fill={colorFn(p)}
               onClick={() => onSelect(p.id)}
             >
-              <title>{p.name}</title>
+              <title>{p.name}{valueFn ? ` · ${valueFn(p)}` : ''}</title>
             </polygon>
           )
         })}
         {provinces.map((p) => {
           const l = LABELPOS[p.id]
-          return l ? <text key={`l${p.id}`} className="nw-mlabel" x={projX(l[0])} y={projY(l[1])} textAnchor="middle">{p.id}</text> : null
+          if (!l) return null
+          const value = valueFn ? valueFn(p) : null
+          return (
+            <g key={`l${p.id}`}>
+              <text className="nw-mlabel" x={projX(l[0])} y={projY(l[1]) - (value != null ? 7 : 0)} textAnchor="middle">{p.name}</text>
+              {value != null && <text className="nw-mlabel-value" x={projX(l[0])} y={projY(l[1]) + 10} textAnchor="middle">{value}</text>}
+            </g>
+          )
         })}
         {(points || []).map((s) => (
           <circle key={s.t} cx={projX(s.lon)} cy={projY(s.lat)} r="5" fill={s.c} stroke="#08161D" strokeWidth="1.5">

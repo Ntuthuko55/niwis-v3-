@@ -21,6 +21,10 @@ import pandas as pd
 
 
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+# The forecasting studio is intentionally file-first for this project.  This
+# is the same provincial dataset selected by the map; Supabase remains a
+# fallback for deployments where the local source is not packaged.
+LOCAL_CLIMATE_CSV = Path(__file__).resolve().parents[2] / "csv's" / "mateological.csv"
 _CACHE_LOCK = Lock()
 _SCHEMA_CACHE: dict[str, tuple[float, tuple[str, str | None]]] = {}
 _PROVINCE_CACHE: dict[str, tuple[float, pd.DataFrame]] = {}
@@ -147,6 +151,35 @@ def _cache_frame(key: str, frame: pd.DataFrame) -> None:
 
 
 def load_province_dataframe(province_id: str) -> pd.DataFrame:
+    """Load the selected province from the project CSV, then fall back to Supabase."""
+    local_cache_key = f"local-csv:{province_id}"
+    cached = _fresh_cache_entry(_PROVINCE_CACHE, local_cache_key)
+    if cached is not None:
+        return cached
+
+    if LOCAL_CLIMATE_CSV.exists():
+        try:
+            # Read only the requested province.  This prevents selecting one
+            # province in the UI while training on a national mixed series.
+            province_column = "province"
+            candidates = {value.casefold() for value in _province_candidates(province_id)}
+            chunks = pd.read_csv(LOCAL_CLIMATE_CSV, chunksize=100_000, low_memory=False)
+            matches = [
+                chunk.loc[chunk[province_column].astype(str).str.casefold().isin(candidates)]
+                for chunk in chunks
+            ]
+            matches = [chunk for chunk in matches if not chunk.empty]
+            if matches:
+                df = pd.concat(matches, ignore_index=True)
+                if "date" in df.columns:
+                    df = df.sort_values("date", kind="stable").reset_index(drop=True)
+                _cache_frame(local_cache_key, df)
+                return df.copy(deep=True)
+        except (OSError, ValueError, KeyError, pd.errors.ParserError) as exc:
+            raise SupabaseSourceError(f"Unable to read local climate CSV: {exc}") from exc
+
+        raise SupabaseSourceError(f"No records found in local climate CSV for province '{province_id}'.")
+
     """Retrieve every row for one province, preserving the database schema."""
     base_url, key, table = _settings()
     table_url = f"{base_url}/rest/v1/{quote(table, safe='_')}"

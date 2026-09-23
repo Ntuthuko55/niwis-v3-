@@ -44,7 +44,6 @@ import AutocorrelationAnalysis from './AutocorrelationAnalysis'
 import CycleAnalysis from './CycleAnalysis'
 import DataPreview from './DataPreview'
 import DecompositionAnalysis from './DecompositionAnalysis'
-import ModelTraining from './ModelTraining'
 import PartialAutocorrelationAnalysis from './PartialAutocorrelationAnalysis'
 import SeasonalAnalysis from './SeasonalAnalysis'
 import SouthAfricaProvinceMap from './SouthAfricaProvinceMap'
@@ -701,24 +700,6 @@ export default function TimeSeriesDashboard() {
           </div>
         )}
 
-        {/* TAB 12: FEATURE ENGINEERING */}
-          {dataset && (
-            <div className="ts-forecasting-block">
-              <div className="ts-section-intro">
-                <p className="eyebrow">FORECASTING STUDIO</p>
-                <h2>Predictive working section for {selectedColumn || 'the active series'}</h2>
-                <p>Use the forecasting controls below to generate forward-looking projections for the loaded province dataset. This remains the final section of the studio workflow, beneath the analysis stack.</p>
-              </div>
-              <div className="ts-forecasting-shell">
-                <ModelTraining
-                  datasetId={dataset.dataset_id}
-                  dateColumn={dateColumn}
-                  numericColumns={numericColumns}
-                  allColumns={dataset.columns || []}
-                />
-              </div>
-            </div>
-          )}
         </div>
       </main>
 

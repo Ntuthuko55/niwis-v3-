@@ -68,7 +68,12 @@ export default function ForecastingWorkspace() {
   }
 
   const dateColumn = dataset?.index_column || dataset?.inferred_time_columns?.[0] || 'date'
-  const numericColumns = dataset?.dataset_summary?.numeric_columns || []
+  const allColumns = (dataset?.columns || []).map((column) => (typeof column === 'string' ? column : column?.name)).filter(Boolean)
+  const numericColumns = (dataset?.columns || [])
+    .filter((column) => typeof column === 'string' || column?.type === 'numeric')
+    .map((column) => (typeof column === 'string' ? column : column.name))
+    .filter(Boolean)
+  const resolvedNumeric = numericColumns.length ? numericColumns : (dataset?.dataset_summary?.numeric_columns || [])
   const activeSource = 'Supabase'
   const sourceStatus = 'Supabase live'
   const dateRange = dataset?.dataset_summary?.date_range || {}
@@ -171,8 +176,8 @@ export default function ForecastingWorkspace() {
           <ModelTraining
             datasetId={dataset.dataset_id}
             dateColumn={dateColumn}
-            numericColumns={numericColumns}
-            allColumns={dataset.columns || []}
+            numericColumns={resolvedNumeric}
+            allColumns={allColumns}
           />
         </div>
       )}

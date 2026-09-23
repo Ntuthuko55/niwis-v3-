@@ -5,7 +5,7 @@ import time
 import csv
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 import pandas as pd
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Query
@@ -135,6 +135,24 @@ def get_satellite_history(district: str = Query(..., min_length=1)):
         raise HTTPException(status_code=404, detail="District not found in satellite CSV.")
     fields = ["date", "NDVI", "LST", "NDWI", "VCI", "TCI", "VHI", "rootzone_soil_moisture", "surface_soil_moisture", "surface_water_extent_km2", "GRACE_TWS"]
     return {"district": rows.iloc[0]["district_name"].title(), "history": [{field: (str(row[field]) if field == "date" else float(row[field])) for field in fields} for row in rows[fields].to_dict("records")]}
+
+from app.hydrology_service import get_all_stations, get_district_hydrology_history
+
+@app.get("/hydrology/stations")
+def get_hydrology_stations(date: Optional[str] = Query("2025-08-01")):
+    """Return station summaries and latest indicators for all 52 districts in csv's/hydrology.csv."""
+    try:
+        return get_all_stations(target_date=date or "2025-08-01")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@app.get("/hydrology/history")
+def get_hydrology_history(district: str = Query(..., min_length=1), date: Optional[str] = Query("2025-08-01")):
+    """Return complete hydrological time series, FDC, groundwater, runoff and insights for one district."""
+    try:
+        return get_district_hydrology_history(district_name=district, target_date=date or "2025-08-01")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 # Global state
 DATASETS: Dict[str, dict] = {}

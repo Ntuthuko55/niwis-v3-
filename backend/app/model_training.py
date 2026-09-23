@@ -16,7 +16,8 @@ _DAILY_PIPELINE_MODELS = frozenset({
 
 # Models trained on monthly aggregates; horizon is expressed in months.
 _MONTHLY_MODELS = frozenset({
-    'ar', 'ma', 'arma', 'arima', 'sarima',
+    'ar', 'ma', 'arma', 'arima', 'sarima', 'prophet',
+    'state_space', 'garch', 'lstm', 'transformer',
     'naive', 'historicaverage', 'windowaverage', 'seasonalnaive',
 })
 
@@ -97,6 +98,300 @@ def _future_dates(dates: pd.Series, steps: int) -> list[str]:
     last_date = pd.to_datetime(dates.iloc[-1])
     frequency = pd.infer_freq(pd.to_datetime(dates).drop_duplicates()) if len(dates) >= 3 else None
     return [value.isoformat() for value in pd.date_range(last_date, periods=steps + 1, freq=frequency or 'D')[1:]]
+
+
+def _train_prophet_monthly(data: pd.DataFrame, date_column: str, target: str, forecast_steps: int) -> Dict[str, Any]:
+    """Run Prophet with the same monthly ``ds`` / ``y`` flow used in the notebook.
+
+    Fitting Prophet on every daily climate record makes the interactive job look
+    stuck and is not the workflow used for the project's SPI forecasts.  The
+    source is therefore aggregated to one observation per month, held out
+    chronologically, evaluated against matching monthly dates, then refit on all
+    available months for the requested future horizon.
+    """
+    from prophet import Prophet
+
+    monthly = _monthly_series(data, date_column, target)
+    if len(monthly) < 24:
+        raise ValueError('Prophet requires at least 24 monthly observations.')
+
+    horizon = _forecast_horizon_months(forecast_steps)
+    test_points = min(max(2, horizon), 12, max(2, len(monthly) // 5))
+    small_train = monthly.iloc[:-test_points].copy()
+    test = monthly.iloc[-test_points:].copy()
+
+    prophet_train = small_train[[date_column, target]].rename(columns={date_column: 'ds', target: 'y'})
+    prophet_test = test[[date_column, target]].rename(columns={date_column: 'ds', target: 'y'})
+    prophet_train['ds'] = pd.to_datetime(prophet_train['ds'])
+    prophet_test['ds'] = pd.to_datetime(prophet_test['ds'])
+
+    # This deliberately mirrors the user's proven notebook configuration.
+    validation_model = Prophet(yearly_seasonality=True)
+    validation_model.fit(prophet_train)
+    validation_future = validation_model.make_future_dataframe(periods=test_points, freq='M')
+    validation_predictions = validation_model.predict(validation_future)[['ds', 'yhat']].tail(test_points)
+    prophet_eval = prophet_test.merge(validation_predictions, on='ds', how='inner')
+    if prophet_eval.empty:
+        raise ValueError('Prophet validation produced no monthly dates matching the holdout.')
+    validation_metrics = _metrics(prophet_eval['y'].to_numpy(), prophet_eval['yhat'].to_numpy())
+
+    # Refit with every observed month before producing the dashboard forecast.
+    full_train = monthly[[date_column, target]].rename(columns={date_column: 'ds', target: 'y'})
+    full_train['ds'] = pd.to_datetime(full_train['ds'])
+    final_model = Prophet(yearly_seasonality=True, interval_width=0.95)
+    final_model.fit(full_train)
+    future = final_model.make_future_dataframe(periods=horizon, freq='M')
+    forecast = final_model.predict(future).tail(horizon)
+
+    return {
+        'model_type': 'prophet',
+        'observations': len(monthly),
+        'train_observations': len(small_train),
+        'test_observations': len(prophet_eval),
+        'features_used': ['yearly seasonality'],
+        'metrics': validation_metrics,
+        'actual': [float(value) for value in prophet_eval['y']],
+        'predicted': [float(value) for value in prophet_eval['yhat']],
+        'dates': [value.isoformat() for value in prophet_eval['ds']],
+        'history_dates': [value.isoformat() for value in full_train['ds']],
+        'history_values': [float(value) for value in full_train['y']],
+        'forecast_dates': [value.isoformat() for value in forecast['ds']],
+        'forecast_values': [float(value) for value in forecast['yhat']],
+        'lower_bound': [float(value) for value in forecast['yhat_lower']],
+        'upper_bound': [float(value) for value in forecast['yhat_upper']],
+        'selected_model': 'prophet',
+        'warnings': [],
+    }
+
+
+def _train_lstm_monthly(data: pd.DataFrame, date_column: str, target: str, features: list[str], forecast_steps: int) -> Dict[str, Any]:
+    """Multivariate monthly LSTM matching the project's notebook workflow.
+
+    The notebook uses monthly means, MinMax feature/target scalers, a 12-month
+    lookback and two LSTM layers (64 then 32) with dropout.  TensorFlow is not a
+    dependency of this application; the equivalent architecture below uses the
+    installed PyTorch runtime, so the Forecasting Studio stays deployable.
+    """
+    from sklearn.preprocessing import MinMaxScaler
+    import torch
+    from torch import nn
+
+    selected_features = list(dict.fromkeys(feature for feature in features if feature != target))
+    if not selected_features:
+        raise ValueError('LSTM needs at least one input feature. Select the climate features to use with the target.')
+    required = [date_column, target, *selected_features]
+    missing = [column for column in required if column not in data.columns]
+    if missing:
+        raise ValueError(f'LSTM feature columns not found: {", ".join(missing)}')
+
+    # Same monthly aggregation as the notebook: numeric monthly means, sorted
+    # chronologically, then drop rows where a selected input or target is absent.
+    frame = data[required].copy()
+    frame[date_column] = pd.to_datetime(frame[date_column], errors='coerce')
+    frame = frame.dropna(subset=[date_column]).sort_values(date_column)
+    monthly = frame.set_index(date_column)[[target, *selected_features]].resample('ME').mean().dropna().reset_index()
+    if len(monthly) < 36:
+        raise ValueError('LSTM needs at least 36 complete monthly observations after feature cleaning.')
+
+    split_index = int(len(monthly) * 0.80)
+    train_data, test_data = monthly.iloc[:split_index].copy(), monthly.iloc[split_index:].copy()
+    lookback = 12
+    if len(train_data) <= lookback or len(test_data) < 2:
+        raise ValueError('Not enough monthly data for a 12-month LSTM lookback and test set.')
+
+    def fit_lstm(x_values: np.ndarray, y_values: np.ndarray):
+        """Train 64→32 LSTM with dropout and chronological early stopping."""
+        x_seq = np.asarray([x_values[i - lookback:i] for i in range(lookback, len(x_values))], dtype=np.float32)
+        y_seq = np.asarray([y_values[i] for i in range(lookback, len(y_values))], dtype=np.float32)
+        if len(x_seq) < 12:
+            raise ValueError('LSTM has too few training sequences after applying the 12-month lookback.')
+        validation_count = max(1, int(len(x_seq) * 0.20))
+        train_x, valid_x = x_seq[:-validation_count], x_seq[-validation_count:]
+        train_y, valid_y = y_seq[:-validation_count], y_seq[-validation_count:]
+
+        class LSTMNetwork(nn.Module):
+            def __init__(self, feature_count: int):
+                super().__init__()
+                self.lstm_one = nn.LSTM(feature_count, 64, batch_first=True)
+                self.dropout_one = nn.Dropout(0.2)
+                self.lstm_two = nn.LSTM(64, 32, batch_first=True)
+                self.dropout_two = nn.Dropout(0.2)
+                self.output = nn.Linear(32, 1)
+
+            def forward(self, values):
+                values, _ = self.lstm_one(values)
+                values = self.dropout_one(values)
+                values, _ = self.lstm_two(values)
+                values = self.dropout_two(values[:, -1, :])
+                return self.output(values)
+
+        torch.manual_seed(42)
+        torch.set_num_threads(1)
+        model = LSTMNetwork(x_values.shape[1])
+        optimiser = torch.optim.Adam(model.parameters())
+        loss_fn = nn.MSELoss()
+        train_tensor = torch.tensor(train_x)
+        train_target = torch.tensor(train_y).view(-1, 1)
+        valid_tensor = torch.tensor(valid_x)
+        valid_target = torch.tensor(valid_y).view(-1, 1)
+        best_state, best_loss, waiting = None, float('inf'), 0
+        for _ in range(100):
+            model.train()
+            optimiser.zero_grad()
+            loss = loss_fn(model(train_tensor), train_target)
+            loss.backward()
+            optimiser.step()
+            model.eval()
+            with torch.no_grad():
+                val_loss = float(loss_fn(model(valid_tensor), valid_target).item())
+            if val_loss < best_loss - 1e-7:
+                best_loss, waiting = val_loss, 0
+                best_state = {key: value.detach().clone() for key, value in model.state_dict().items()}
+            else:
+                waiting += 1
+                if waiting >= 10:  # identical patience to the notebook
+                    break
+        if best_state is not None:
+            model.load_state_dict(best_state)
+        model.eval()
+        return model
+
+    feature_scaler, target_scaler = MinMaxScaler(), MinMaxScaler()
+    x_train_scaled = feature_scaler.fit_transform(train_data[selected_features])
+    x_test_scaled = feature_scaler.transform(test_data[selected_features])
+    y_train_scaled = target_scaler.fit_transform(train_data[[target]]).reshape(-1)
+    validation_model = fit_lstm(x_train_scaled, y_train_scaled)
+
+    # The test input begins with the final training lookback, exactly as in the
+    # notebook. This produces one prediction for every held-out month.
+    test_input = np.vstack([x_train_scaled[-lookback:], x_test_scaled])
+    x_test = np.asarray([test_input[i - lookback:i] for i in range(lookback, len(test_input))], dtype=np.float32)
+    with torch.no_grad():
+        y_pred_scaled = validation_model(torch.tensor(x_test)).numpy()
+    y_pred = target_scaler.inverse_transform(y_pred_scaled).reshape(-1)
+    y_actual = test_data[target].to_numpy(dtype=float)
+
+    # Refit on all known months before a recursive future projection. Future
+    # exogenous climate inputs are not known yet, so their latest observed
+    # monthly values are held constant; this is explicit rather than silently
+    # discarding the feature variables.
+    full_x_scaled = feature_scaler.fit_transform(monthly[selected_features])
+    full_y_scaled = target_scaler.fit_transform(monthly[[target]]).reshape(-1)
+    final_model = fit_lstm(full_x_scaled, full_y_scaled)
+    horizon = _forecast_horizon_months(forecast_steps)
+    history_features = [row.copy() for row in full_x_scaled]
+    future_scaled = []
+    with torch.no_grad():
+        for _ in range(horizon):
+            window = np.asarray(history_features[-lookback:], dtype=np.float32).reshape(1, lookback, len(selected_features))
+            prediction = float(final_model(torch.tensor(window)).item())
+            future_scaled.append(prediction)
+            history_features.append(history_features[-1].copy())
+    future_values = target_scaler.inverse_transform(np.asarray(future_scaled).reshape(-1, 1)).reshape(-1)
+    residual_scale = max(float(np.std(y_actual - y_pred)), 1e-6)
+    spread = 1.96 * residual_scale * np.sqrt(np.arange(1, horizon + 1))
+    future_dates = pd.date_range(pd.to_datetime(monthly[date_column].iloc[-1]) + pd.offsets.MonthEnd(1), periods=horizon, freq='ME')
+
+    return {
+        'model_type': 'lstm',
+        'observations': len(monthly),
+        'train_observations': len(train_data),
+        'test_observations': len(test_data),
+        'features_used': selected_features,
+        'metrics': _metrics(y_actual, y_pred),
+        'actual': [float(value) for value in y_actual],
+        'predicted': [float(value) for value in y_pred],
+        'dates': [value.isoformat() for value in test_data[date_column]],
+        'history_dates': [value.isoformat() for value in monthly[date_column]],
+        'history_values': [float(value) for value in monthly[target]],
+        'forecast_dates': [value.isoformat() for value in future_dates],
+        'forecast_values': [float(value) for value in future_values],
+        'lower_bound': [float(value) for value in future_values - spread],
+        'upper_bound': [float(value) for value in future_values + spread],
+        'selected_model': 'lstm',
+        'warnings': ['Future feature values use the latest observed monthly climate inputs until external future climate scenarios are supplied.'],
+    }
+
+
+def _monthly_model_result(data: pd.DataFrame, date_column: str, target: str, forecast_steps: int, model_type: str) -> Dict[str, Any]:
+    """Fit non-Prophet advanced models on monthly provincial series.
+
+    This keeps State Space, GARCH, LSTM and Transformer responsive and makes
+    their validation and future projection use the same frequency.  Previously
+    these options either entered the generic auto pipeline or used a legacy
+    daily path whose future projection did not support the selected method.
+    """
+    monthly = _monthly_series(data, date_column, target)
+    if len(monthly) < 24:
+        raise ValueError(f'{model_type} requires at least 24 monthly observations.')
+
+    horizon = _forecast_horizon_months(forecast_steps)
+    test_points = min(max(2, horizon), 12, max(2, len(monthly) // 5))
+    series = pd.Series(monthly[target].astype(float).to_numpy(), index=pd.to_datetime(monthly[date_column]))
+    train, test = series.iloc[:-test_points], series.iloc[-test_points:]
+
+    def state_space(values: pd.Series, steps: int):
+        from statsmodels.tsa.statespace.sarimax import SARIMAX
+        fit = SARIMAX(
+            values.astype(float), order=(1, 1, 1), seasonal_order=(0, 0, 0, 0),
+            enforce_stationarity=False, enforce_invertibility=False,
+        ).fit(disp=False, maxiter=80)
+        result = fit.get_forecast(steps=steps)
+        ci = result.conf_int(alpha=0.05)
+        lower = np.asarray(ci.iloc[:, 0] if hasattr(ci, 'iloc') else ci[:, 0], dtype=float)
+        upper = np.asarray(ci.iloc[:, 1] if hasattr(ci, 'iloc') else ci[:, 1], dtype=float)
+        return np.asarray(result.predicted_mean, dtype=float), lower, upper
+
+    def garch(values: pd.Series, steps: int):
+        from arch import arch_model
+        changes = values.diff().dropna()
+        if len(changes) < 20 or changes.std() < 1e-8:
+            raise ValueError('GARCH needs variation in at least 20 monthly changes.')
+        fit = arch_model(changes, mean='AR', lags=1, vol='GARCH', p=1, q=1, dist='normal', rescale=True).fit(disp='off')
+        projection = fit.forecast(horizon=steps, reindex=False)
+        mean_changes = np.asarray(projection.mean.iloc[-1], dtype=float)
+        variance = np.asarray(projection.variance.iloc[-1], dtype=float)
+        values_out = float(values.iloc[-1]) + np.cumsum(mean_changes)
+        # Error accumulation gives an honest widening level interval.
+        spread = 1.96 * np.sqrt(np.cumsum(np.maximum(variance, 0)))
+        return values_out, values_out - spread, values_out + spread
+
+    def sequence(values: pd.Series, steps: int):
+        preds = _train_torch_sequence(values.to_numpy(), steps, model_type)
+        residual_scale = max(float(values.diff().dropna().std()), 1e-6)
+        spread = 1.96 * residual_scale * np.sqrt(np.arange(1, steps + 1))
+        return np.asarray(preds, dtype=float), np.asarray(preds, dtype=float) - spread, np.asarray(preds, dtype=float) + spread
+
+    runners = {
+        'state_space': state_space,
+        'garch': garch,
+        'lstm': sequence,
+        'transformer': sequence,
+    }
+    runner = runners[model_type]
+    validation_pred, _, _ = runner(train, len(test))
+    forecast_values, lower, upper = runner(series, horizon)
+    future_dates = pd.date_range(series.index[-1] + pd.offsets.MonthEnd(1), periods=horizon, freq='ME')
+
+    return {
+        'model_type': model_type,
+        'observations': len(series),
+        'train_observations': len(train),
+        'test_observations': len(test),
+        'features_used': [],
+        'metrics': _metrics(test.to_numpy(), validation_pred),
+        'actual': [float(value) for value in test],
+        'predicted': [float(value) for value in validation_pred],
+        'dates': [value.isoformat() for value in test.index],
+        'history_dates': [value.isoformat() for value in series.index],
+        'history_values': [float(value) for value in series],
+        'forecast_dates': [value.isoformat() for value in future_dates],
+        'forecast_values': [float(value) for value in forecast_values],
+        'lower_bound': [float(value) for value in lower],
+        'upper_bound': [float(value) for value in upper],
+        'selected_model': model_type,
+        'warnings': [],
+    }
 
 
 def _niwis_forecast(data: pd.DataFrame, config: Dict[str, Any], numeric_cols: list[str]) -> Dict[str, Any]:
@@ -255,6 +550,11 @@ def train_model(df: pd.DataFrame, config: Dict[str, Any]) -> Dict[str, Any]:
     target = config['target']
     date_column = config['date_column']
 
+    # LSTM keeps the selected feature columns through monthly aggregation; it
+    # must run before the univariate monthly-preparation branch below.
+    if model_type == 'lstm':
+        return _train_lstm_monthly(data, date_column, target, config.get('features', []), config.get('forecast_steps', 365))
+
     # Keep daily resolution for the NIWIS daily pipeline; aggregate to monthly only
     # for classical monthly models (SARIMA, naive baselines, etc.).
     if (
@@ -268,8 +568,14 @@ def train_model(df: pd.DataFrame, config: Dict[str, Any]) -> Dict[str, Any]:
             date_column = data.columns[0]
             target = data.columns[1]
 
-    if model_type in {'auto', 'prophet', 'sarimax', 'ets', 'ml',
-                      'ar', 'ma', 'arma', 'arima', 'sarima', 'state_space', 'garch'}:
+    if model_type == 'prophet':
+        return _train_prophet_monthly(data, date_column, target, config.get('forecast_steps', 365))
+
+    if model_type in {'state_space', 'garch', 'lstm', 'transformer'}:
+        return _monthly_model_result(data, date_column, target, config.get('forecast_steps', 365), model_type)
+
+    if model_type in {'auto', 'sarimax', 'ets', 'ml',
+                      'ar', 'ma', 'arma', 'arima', 'sarima'}:
         if model_type in {'ar', 'ma', 'arma', 'arima', 'sarima'}:
             from app.forecasting.kzn_pipeline import (
                 naive_forecast,

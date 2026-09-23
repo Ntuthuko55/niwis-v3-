@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getTrainingJob, startTraining } from '../services/api'
-import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Area, CartesianGrid, Legend, Line, ComposedChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 
 const modelGroups = [
   {
@@ -50,16 +50,38 @@ const requiresFeatureSelection = (value) => {
   return ['var', 'varmax', 'garch', 'lstm', 'transformer', 'state space', 'state_space'].includes(normalized)
 }
 
+export const lstmDefaultFeatures = [
+  'monthly_rainfall', 'monthly_tmean', 'monthly_pet',
+  'monthly_relative_humidity', 'monthly_solar_radiation_mj_m2_day',
+  'monthly_wind_speed_2m_m_s', 'rainfall_accumulation_3m',
+  'water_balance_accumulation_3m',
+]
+
+export function preferredForecastTarget(columns = []) {
+  return columns.find((column) => column === 'spi_3')
+    || columns.find((column) => /spi[_ ]?3/i.test(column))
+    || columns[0]
+    || ''
+}
+
+export { modelGroups, modelKey, requiresFeatureSelection }
+
+function columnList(columns = []) {
+  return columns.map((column) => (typeof column === 'string' ? column : column?.name)).filter(Boolean)
+}
+
 export default function ModelTraining({ datasetId, dateColumn, numericColumns, allColumns }) {
-  const [model, setModel] = useState('Auto')
-  const [target, setTarget] = useState(numericColumns[0] || '')
+  const numericNames = columnList(numericColumns)
+  const groupingNames = columnList(allColumns)
+  const [model, setModel] = useState('LSTM')
+  const [target, setTarget] = useState(preferredForecastTarget(numericNames))
   const [group, setGroup] = useState('')
-  const [features, setFeatures] = useState([])
+  const [features, setFeatures] = useState(lstmDefaultFeatures)
   const [forecastDays, setForecastDays] = useState(365)
   const [job, setJob] = useState(null)
   const [error, setError] = useState('')
 
-  useEffect(() => setTarget(numericColumns[0] || ''), [numericColumns])
+  useEffect(() => setTarget(preferredForecastTarget(numericNames)), [numericNames.join('|')])
   useEffect(() => {
     if (!job?.job_id || ['completed', 'failed'].includes(job.status)) return
     const timer = setInterval(async () => {
@@ -82,8 +104,15 @@ export default function ModelTraining({ datasetId, dateColumn, numericColumns, a
   useEffect(() => {
     if (!multiFeatureModel) {
       setFeatures([])
+      return
     }
-  }, [multiFeatureModel])
+    if (model !== 'LSTM') return
+    setFeatures((current) => {
+      const recommended = lstmDefaultFeatures.filter((feature) => numericNames.includes(feature) && feature !== target)
+      if (!current.length) return recommended
+      return current.filter((feature) => numericNames.includes(feature) && feature !== target)
+    })
+  }, [model, multiFeatureModel, numericNames.join('|'), target])
   const forecastDates = result?.forecast_dates || []
   const forecastValues = result?.forecast_values || []
   const lowerBound = result?.lower_bound || []
@@ -126,8 +155,19 @@ export default function ModelTraining({ datasetId, dateColumn, numericColumns, a
   const lb = srcForecast.lower_bound || []
   const ub = srcForecast.upper_bound || []
   const chartDataModel = result ? [
-    ...srcForecast.history_dates.map((date, index) => ({ date, observed: srcForecast.history_values?.[index], forecast: null, lower: null, upper: null })).filter((_, index) => index % step === 0 || index === srcForecast.history_dates.length - 1),
-    ...fdates.map((date, index) => ({ date, observed: null, forecast: fvalues[index], lower: lb[index], upper: ub[index] })),
+    ...srcForecast.history_dates.map((date, index) => ({ date, observed: srcForecast.history_values?.[index], forecast: null, lower: null, upper: null, band: null })).filter((_, index) => index % step === 0 || index === srcForecast.history_dates.length - 1),
+    ...fdates.map((date, index) => {
+      const lower = Number(lb[index])
+      const upper = Number(ub[index])
+      return {
+        date,
+        observed: null,
+        forecast: fvalues[index],
+        lower: Number.isFinite(lower) ? lower : null,
+        upper: Number.isFinite(upper) ? upper : null,
+        band: Number.isFinite(lower) && Number.isFinite(upper) ? Math.max(0, upper - lower) : null,
+      }
+    }),
   ] : []
 
   // When a new result arrives, default the selected tab to the selected model
@@ -182,13 +222,13 @@ export default function ModelTraining({ datasetId, dateColumn, numericColumns, a
             </label>
             <label>{multiFeatureModel ? 'Primary target' : 'Target'}
               <select value={target} onChange={(e) => setTarget(e.target.value)}>
-                {numericColumns.map((item) => <option key={item}>{item}</option>)}
+                {numericNames.map((item) => <option key={item}>{item}</option>)}
               </select>
             </label>
             <label>Group (optional)
               <select value={group} onChange={(e) => setGroup(e.target.value)}>
                 <option value="">No grouping</option>
-                {allColumns.filter((item) => item !== dateColumn).map((item) => <option key={item}>{item}</option>)}
+                {groupingNames.filter((item) => item !== dateColumn).map((item) => <option key={item}>{item}</option>)}
               </select>
             </label>
             <label>Forecast range
@@ -205,8 +245,8 @@ export default function ModelTraining({ datasetId, dateColumn, numericColumns, a
           {multiFeatureModel && (
             <div className="feature-picker">
               <strong>Additional forecasting features</strong>
-              <span>For VAR, VARMAX, GARCH, LSTM, Transformer and state-space models, include extra numerical series used alongside the primary target.</span>
-              <div>{numericColumns.filter((item) => item !== target).map((item) => <label key={item} className="check-label"><input type="checkbox" checked={features.includes(item)} onChange={() => toggleFeature(item)} />{item}</label>)}</div>
+              <span>{model === 'LSTM' ? 'LSTM uses the selected climate variables as its 12-month input sequence. Recommended monthly inputs are selected automatically; you can adjust them before training.' : 'For VAR, VARMAX, GARCH, Transformer and state-space models, include extra numerical series used alongside the primary target.'}</span>
+              <div>{numericNames.filter((item) => item !== target).map((item) => <label key={item} className="check-label"><input type="checkbox" checked={features.includes(item)} onChange={() => toggleFeature(item)} />{item}</label>)}</div>
             </div>
           )}
           <button className="primary-button" disabled={training || !target} onClick={train}>
@@ -316,23 +356,24 @@ export default function ModelTraining({ datasetId, dateColumn, numericColumns, a
                 <div className="prediction-output">
                   <div className="prediction-heading">
                     <div>
-                      <h3>Future forecast</h3>
-                      <p>Solid: observed data. Dashed: predicted values. Lines: 95% prediction interval.</p>
+                      <h3>Forecast trajectory</h3>
+                      <p>Observed history joins the forecast at the dashed start line. The blue cone is the returned 95% confidence interval.</p>
                     </div>
                   </div>
                   <div className="prediction-chart">
                     <ResponsiveContainer width="100%" height={330}>
-                      <LineChart data={chartDataModel}>
-                        <CartesianGrid strokeDasharray="3 3" />
+                      <ComposedChart data={chartDataModel}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#dbe7ee" />
                         <XAxis dataKey="date" tickFormatter={(value) => String(value).slice(0, 10)} minTickGap={40} />
                         <YAxis />
                         <Tooltip formatter={(value) => Number(value).toFixed(3)} />
                         <Legend />
-                        {lb?.length > 0 && <Line dataKey="upper" name="Upper CI" stroke="#e47738" strokeDasharray="3 3" dot={false} isAnimationActive={false} />}
-                        {lb?.length > 0 && <Line dataKey="lower" name="Lower CI" stroke="#e47738" strokeDasharray="3 3" dot={false} isAnimationActive={false} />}
-                        <Line dataKey="observed" name="Observed" stroke="#456b75" dot={false} isAnimationActive={false} />
-                        <Line dataKey="forecast" name="Forecast" stroke="#e47738" strokeDasharray="7 5" dot={false} isAnimationActive={false} />
-                      </LineChart>
+                        {fdates[0] && <ReferenceLine x={fdates[0]} stroke="#2fa8c9" strokeDasharray="5 5" label={{ value: 'Forecast start', position: 'insideTopLeft', fill: '#26728a', fontSize: 11 }} />}
+                        {lb?.length > 0 && <Area dataKey="lower" stackId="confidence" stroke="none" fill="transparent" legendType="none" isAnimationActive={false} />}
+                        {lb?.length > 0 && <Area dataKey="band" stackId="confidence" name="95% confidence range" stroke="none" fill="#7dd3fc" fillOpacity={0.32} isAnimationActive={false} />}
+                        <Line dataKey="observed" name="Historical" stroke="#456b75" strokeWidth={2.2} dot={false} isAnimationActive={false} connectNulls />
+                        <Line dataKey="forecast" name="Forecast" stroke="#0284c7" strokeWidth={2.8} dot={false} isAnimationActive={false} connectNulls />
+                      </ComposedChart>
                     </ResponsiveContainer>
                   </div>
                   <div className="prediction-table-wrap">

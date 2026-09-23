@@ -21,6 +21,21 @@ export const PROV_META = [
 
 export const NAME_TO_ID = Object.fromEntries(PROV_META.map((p) => [p.name, p.id]))
 
+// Baseline drought indicators used only while the prediction service has not
+// returned a trained-model result. They keep the operational overview useful
+// without presenting sample values as an actual forecast.
+export const BASELINE_PROVINCES = {
+  'Eastern Cape': { spi: -0.98, d: 'D1', rain6: 130, rainAnomaly: -26, tempAnomaly: 0.9, soilDeficit: 57 },
+  'Free State': { spi: -1.05, d: 'D1', rain6: 116, rainAnomaly: -31, tempAnomaly: 1.1, soilDeficit: 61 },
+  Gauteng: { spi: -1.38, d: 'D2', rain6: 124, rainAnomaly: -42, tempAnomaly: 1.6, soilDeficit: 68 },
+  'KwaZulu-Natal': { spi: -1.26, d: 'D1', rain6: 182, rainAnomaly: -24, tempAnomaly: 1.2, soilDeficit: 53 },
+  Limpopo: { spi: -0.62, d: 'D0', rain6: 78, rainAnomaly: -16, tempAnomaly: 1.4, soilDeficit: 44 },
+  Mpumalanga: { spi: -0.87, d: 'D1', rain6: 94, rainAnomaly: -22, tempAnomaly: 1.3, soilDeficit: 51 },
+  'North West': { spi: -1.21, d: 'D1', rain6: 72, rainAnomaly: -35, tempAnomaly: 1.5, soilDeficit: 64 },
+  'Northern Cape': { spi: -0.45, d: '-', rain6: 41, rainAnomaly: -12, tempAnomaly: 1.0, soilDeficit: 39 },
+  'Western Cape': { spi: -0.72, d: 'D0', rain6: 105, rainAnomaly: -18, tempAnomaly: 0.7, soilDeficit: 42 },
+}
+
 export const GEO = {
   WC: [[17.9, -32.8], [18.3, -34.4], [19.5, -34.8], [20.8, -34.5], [22.2, -34.1], [23.6, -34.0], [24.2, -33.4], [23.9, -32.6], [22.5, -32.2], [21.0, -31.6], [19.2, -31.7], [18.2, -31.9], [17.2, -30.9]],
   NC: [[16.5, -28.5], [17.4, -28.0], [19.0, -28.5], [19.9, -28.4], [20.0, -24.9], [20.9, -26.4], [22.8, -26.1], [23.0, -27.8], [24.6, -28.6], [25.0, -30.0], [24.9, -31.5], [23.9, -32.6], [22.5, -32.2], [21.0, -31.6], [19.2, -31.7], [18.2, -31.9], [17.2, -30.9], [17.2, -30.5]],
@@ -196,11 +211,12 @@ export const ROLES = [
 
 export const NAV = [
   ['Situation', [
-    ['overview', 'National overview', '1', true],
+    ['overview', 'Mateological drought', '1', true],
     ['drought', 'Drought status', '2', true],
     ['alerts', 'Alerts and early warning', '3', true],
     ['studio', 'Analysis studio', '—', true],
     ['satellite', '🛰️ Satellite & Remote Sensing Drought', '—', true],
+    ['hydrology', '💧 Hydrological Drought', '—', true],
   ]],
   ['Monitoring', [
     ['rainfall', 'Rainfall', '4', true],
@@ -250,17 +266,21 @@ export function liveProvinces(predictions = []) {
   const byName = Object.fromEntries(predictions.map((item) => [item.province, item]))
   return PROV_META.map((meta) => {
     const row = byName[meta.name]
-    const spi = Number(row?.bundle?.consensus_spi ?? 0)
-    const code = row?.bundle?.drought_code || '-'
+    const baseline = BASELINE_PROVINCES[meta.name] || {}
+    const spi = Number(row?.bundle?.consensus_spi ?? baseline.spi ?? 0)
+    const code = row?.bundle?.drought_code || baseline.d || '-'
     return {
       ...meta,
       d: code,
       spi,
       rain: Number(row?.inputs?.rainfall ?? 0),
-      rain6: Number(row?.inputs?.seasonal_rainfall_6m ?? 0),
+      rain6: Number(row?.inputs?.seasonal_rainfall_6m ?? baseline.rain6 ?? 0),
       tmean: Number(row?.inputs?.mean_temperature ?? 0),
       pet: Number(row?.inputs?.pet ?? 0),
       humidity: Number(row?.inputs?.humidity ?? 0),
+      rainAnomaly: baseline.rainAnomaly ?? 0,
+      tempAnomaly: baseline.tempAnomaly ?? 0,
+      soilDeficit: baseline.soilDeficit ?? 0,
       date: row?.observation_date || null,
       bundle: row?.bundle || null,
       inputs: row?.inputs || null,

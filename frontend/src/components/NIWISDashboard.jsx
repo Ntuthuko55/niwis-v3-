@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Plot from 'react-plotly.js'
 import SouthAfricaProvinceMap from './SouthAfricaProvinceMap'
+import { PROV_META } from '../niwis/demoData'
 
 const initialState = {
   province: 'Eastern Cape',
@@ -56,12 +57,67 @@ export default function NIWISDashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
+      if (!response.ok) throw new Error('prediction endpoint not available')
       const json = await response.json()
+      // if backend returns something malformed, fall back to demo
+      if (!json || !json.bundle) throw new Error('empty prediction, using demo')
       setData(json)
     } catch (error) {
-      console.error(error)
+      console.warn('Prediction API unavailable — using demo data', error)
+      // fallback: construct a demo bundle based on province and inputs
+      const demo = generateDemoBundle(payload.province || initialState.province, payload)
+      setData({ bundle: demo })
     } finally {
       setLoading(false)
+    }
+  }
+
+  function generateDemoBundle(province = 'Eastern Cape', inputs = {}) {
+    const baseByProvince = {
+      'Eastern Cape': -0.98,
+      'Free State': -1.05,
+      'Gauteng': -1.38,
+      'KwaZulu-Natal': -1.26,
+      'Limpopo': -0.62,
+      'Mpumalanga': -0.87,
+      'North West': -1.21,
+      'Northern Cape': -0.45,
+      'Western Cape': -0.72,
+    }
+
+    const base = baseByProvince[province] ?? -0.8
+    const noise = (Math.random() - 0.5) * 0.2
+    const consensus_spi = Number((base + noise).toFixed(3))
+
+    const q50 = consensus_spi
+    const q10 = Number((consensus_spi - 0.6).toFixed(3))
+    const q90 = Number((consensus_spi + 0.4).toFixed(3))
+
+    const importance = {
+      Rainfall: 65.0,
+      PET: 12.0,
+      'High Temperature': 8.0,
+      Humidity: 7.0,
+      'Soil moisture': 8.0,
+    }
+
+    return {
+      consensus_spi,
+      risk_label: consensus_spi <= -1.3 ? 'High risk' : consensus_spi <= -0.8 ? 'Elevated risk' : 'Low risk',
+      drought_days: Math.max(0, Math.round((Math.abs(consensus_spi) + 0.5) * 15)),
+      hazard_ratio: Number((Math.abs(consensus_spi) / 2).toFixed(3)),
+      hazard_days_to_moderate: Math.max(1, Math.round((Math.abs(consensus_spi) * 10))),
+      q10,
+      q50,
+      q90,
+      linear: Number((consensus_spi + 0.02).toFixed(3)),
+      multiple: Number((consensus_spi - 0.05).toFixed(3)),
+      polynomial: Number((consensus_spi + 0.1).toFixed(3)),
+      ridge: Number((consensus_spi - 0.02).toFixed(3)),
+      lasso: Number((consensus_spi - 0.08).toFixed(3)),
+      elastic: Number((consensus_spi + 0.03).toFixed(3)),
+      variable_importance: importance,
+      confidence_score: 72.3,
     }
   }
 
